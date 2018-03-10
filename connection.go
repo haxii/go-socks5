@@ -1,17 +1,22 @@
 package go_socks5
 
 import (
-	"net"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"strconv"
-	"encoding/binary"
+)
+
+const (
+	socks5AuthNone     = 0
+	socks5AuthPassword = 2
 )
 
 type Connection struct {
-	client   *Client
-	conn	 net.Conn
+	client *Client
+	conn   net.Conn
 }
 
 func (c Connection) writePacket(buf []byte) error {
@@ -40,11 +45,15 @@ func (c Connection) readPacket(buf []byte) (int, error) {
 }
 
 func (c Connection) authenticate() error {
-	//TODO support other method than username/password
 	buf := make([]byte, MaxProtoSize)
 	buf[0] = 5 // Socks 5
 	buf[1] = 1 // 1 Method
-	buf[2] = 2 // username/password
+	if len(c.client.Username) > 0 && len(c.client.Username) < 256 && len(c.client.Password) < 256 {
+		buf[2] = socks5AuthPassword
+	} else {
+		buf[2] = socks5AuthNone
+	}
+
 	if err := c.writePacket(buf[0:3]); err != nil {
 		return err
 	}
@@ -56,23 +65,25 @@ func (c Connection) authenticate() error {
 		return errors.New("proxy: no acceptable authentication method")
 	}
 
-	username_len := len(c.client.Username)
-	password_len := len(c.client.Password)
+	if buf[1] == socks5AuthPassword {
+		username_len := len(c.client.Username)
+		password_len := len(c.client.Password)
 
-	buf[0] = 1
-	buf[1] = byte(username_len)
-	copy(buf[2:], c.client.Username)
-	buf[2+username_len] = byte(password_len)
-	copy(buf[3+username_len:], c.client.Password)
-	if err := c.writePacket(buf[0:3+username_len+password_len]); err != nil {
-		return err
-	}
-	if rc, err := c.readPacket(buf); err != nil {
-		return err
-	} else if rc != 2 {
-		return errors.New(fmt.Sprintf("proxy: unexpected response packet size: %d", rc))
-	} else if buf[1] != 0 {
-		return errors.New(fmt.Sprintf("proxy: authentication failed: status=%x", buf[1]))
+		buf[0] = 1
+		buf[1] = byte(username_len)
+		copy(buf[2:], c.client.Username)
+		buf[2+username_len] = byte(password_len)
+		copy(buf[3+username_len:], c.client.Password)
+		if err := c.writePacket(buf[0 : 3+username_len+password_len]); err != nil {
+			return err
+		}
+		if rc, err := c.readPacket(buf); err != nil {
+			return err
+		} else if rc != 2 {
+			return errors.New(fmt.Sprintf("proxy: unexpected response packet size: %d", rc))
+		} else if buf[1] != 0 {
+			return errors.New(fmt.Sprintf("proxy: authentication failed: status=%x", buf[1]))
+		}
 	}
 
 	return nil
